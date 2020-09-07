@@ -27,6 +27,9 @@
 
 extern zlog_category_t * zlogCat;
 extern mqd_t CoAPRxMq;
+extern struct sDeviceInfo DeviceInfo;
+extern pthread_cond_t YCRequestcond;
+extern bool YCRequest;
 
 
 static unsigned char _token_data[8];
@@ -39,7 +42,28 @@ int order_opts(void *a, void *b);
 coap_list_t * new_option_node(unsigned short key, unsigned int length, unsigned char *data);
 coap_pdu_t * coap_new_request(coap_context_t *ctx,uint8_t  msgtype,uint8_t method, str * payload,coap_list_t *options );
 
-
+static const unsigned char *DAName[]={	"Bay01_MC/MMXU1$MX$A$phsA$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$A$phsB$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$A$phsC$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$A$res$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$PhV$phsA$cVal$mag$f",	
+	"Bay01_MC/MMXU1$MX$PhV$phsB$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$PhV$phsC$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$W$phsA$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$W$phsB$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$W$phsC$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$VAr$phsA$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$VAr$phsB$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$VAr$phsC$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$VA$phsA$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$VA$phsB$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$VA$phsC$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$PF$phsA$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$PF$phsB$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$PF$phsC$cVal$mag$f",
+	"Bay01_MC/MMXU1$MX$Hz$mag$f",
+	"Bay01_MC/GGIO1$ST$Ind2$stVal"
+};
 
 
 
@@ -100,6 +124,20 @@ get_block(coap_pdu_t *pdu, coap_opt_iterator_t *opt_iter) {
   coap_option_iterator_init(pdu, opt_iter, f);
   return coap_option_next(opt_iter);
 }
+static void HexArrayToString(uint8_t *hexarray,int length,uint8_t *string)
+{
+   const unsigned char NumCharTable[16] = "0123456789ABCDEF";
+
+   int i = 0;
+	while(i < length)
+	{
+	    *(string++) = NumCharTable[(hexarray[i] >> 4) & 0x0f];
+		*(string++) = NumCharTable[hexarray[i] & 0x0f];
+		i++;
+	}
+	*string = 0x0;
+}
+
 
 void message_handler(struct coap_context_t  *ctx, 
 		const coap_address_t *remote, 
@@ -162,39 +200,80 @@ void message_handler(struct coap_context_t  *ctx,
 	else     //没有COAP_OPTION_URI_PATH，丢掉该帧数据
 		return;
 		     // 查找CoAP请求链表中是否有这个请求
-	cnrList=findPthreadRequestfromListbyid(&cnr);
-	if(cnrList==NULL)
-		return;
+//	cnrList=findPthreadRequestfromListbyid(&cnr);
+//	if(cnrList==NULL)
+//		return;
 
 		
 	//根据应答码进行相应的处理
 	/* output the received data, if any */
 	if (received->hdr->code == COAP_RESPONSE_CODE(205)) 
-	{
-	
-	  /* set obs timer if we have successfully subscribed a resource */
-//	  if (sent && coap_check_option(received, COAP_OPTION_SUBSCRIPTION, &opt_iter)) {
-//		debug("observation relationship established, set timeout to %d\n", obs_seconds);
-//		set_timeout(&obs_wait, obs_seconds);
-//	  }
-	  /* Got some data, check if block option is set. Behavior is undefined if
-		* both, Block1 and Block2 are present. */
+	{		
+				
+		coapopt=coap_check_option(received,COAP_OPTION_URI_PATH, &opt_iter);
+		if(memcpy(path.s,COAP_OPT_VALUE(coapopt),14)==0)   //YC
+		{
+			if(YCRequest==false)return;
+			coapopt=coap_check_option(received,COAP_OPTION_URI_HOST, &opt_iter);
+//			int deviceCount;
+			for(int deviceCount=0;deviceCount<DeviceInfo.num;deviceCount++)
+				if(memcmp(COAP_OPT_VALUE(coapopt),((DeviceInfo.pLTUInfo+deviceCount)->name)+3,6))
+					{
+					(DeviceInfo.pLTUInfo+deviceCount)->state=1;break;
+					}
+						
+			uint8_t name[256]={0};
+			uint8_t ctxname[9]="LTU";
+			HexArrayToString(ctxname+3, 6, coap_opt_value(coapopt));
+			
+		    float value;
+		    
+	        for(int i=0;i<7;i++)
+	        {
+	        	memcpy(&value,databuf,4);
+	        	strcpy(name,ctxname);
+	        	strcat(name,DAName[i]);
+	        	kh_saveDoubDAValue(name,(double)value);
 
-		
+	        	databuf +=4;
+	        }
 
-			block_opt = get_block(received, &opt_iter);
-			if (!block_opt) {
-			/* There is no block option set, just read the data and we are done. */
-				if (coap_get_data(received, &len, &databuf))
-				{
-					memcpy(cnrList->pthpara->msg,databuf,len);
-					cnrList->pthpara->megleg=len;
-				}
-				cnrList->pthpara->timeout=false;
-				pthread_cond_signal(&(cnrList->pthpara->askcond));
-				deletePthreadRequestfromList(cnrList);
-			} 
-			else //块应答
+	        for(int i=0;i<9;i++)
+	        {
+	        	memcpy(&value,databuf,4);
+	        	strcpy(name,ctxname);
+	        	strcat(name,DAName[7+i]);
+	        	kh_saveDoubDAValue(name,(double)value);
+	        	databuf +=4;
+	        }
+	        for(int i=0;i<3;i++)
+	        {
+	        	memcpy(&value,databuf,4);
+	        	strcpy(name,ctxname);
+	        	strcat(name,DAName[16+i]);
+	        	kh_saveDoubDAValue(name,(double)value);
+	        	databuf +=4;
+	        }
+	        /*
+	        for(int i=0;i<3;i++)
+	        {
+	        	memcpy(&ctx->data.ph[i],buffer,4);
+	        	buffer +=4;
+	        }
+	        //*/
+	        	memcpy(&value,databuf,4);
+	        	strcpy(name,ctxname);
+	        	strcat(name,DAName[19]);
+	        	kh_saveDoubDAValue(name,(double)value);
+	        	
+	        DeviceInfo.count++;
+	        if(DeviceInfo.count==DeviceInfo.num)
+	        	pthread_cond_signal(&YCRequestcond);
+	        	
+
+	        
+	     }				
+			block_opt = get_block(received, &opt_iter);			
 			{
 				if(cnrList->req==LTU_TX_BLOCK)//块发送请求
 				{
@@ -421,6 +500,7 @@ extern struct sCoAPNewRequest* PthreadRequestList;
 	    	coap_dispatch( ctx );
 
 	    time_now=time( NULL);
+	    
 	    struct sCoAPNewRequest *pt;
 	    LL_FOREACH(PthreadRequestList,pt)
 	    {
@@ -435,7 +515,12 @@ extern struct sCoAPNewRequest* PthreadRequestList;
 	    	}
 
 	    }
-	    // zlog_debug(zlogCat,"loop done");
+	    if(YCRequest==true)
+	    {
+	    if(time_now - DeviceInfo.time >= 300)
+	    pthread_cond_signal(&YCRequestcond);
+	    }
+	    
 		usleep(2000);
 	}
 	

@@ -30,8 +30,9 @@ extern mqd_t CoAPRxMq;
 extern struct sDeviceInfo DeviceInfo;
 pthread_mutex_t YCRequestmtx=PTHREAD_MUTEX_INITIALIZER;
 bool YCRequest=false;
+pthread_cond_t YCRequestcond=PTHREAD_COND_INITIALIZER;
 
-const unsigned char *DAName[]={	"Bay01_MC/MMXU1$MX$A$phsA$cVal$mag$f",
+static const unsigned char *DAName[]={	"Bay01_MC/MMXU1$MX$A$phsA$cVal$mag$f",
 	"Bay01_MC/MMXU1$MX$A$phsB$cVal$mag$f",
 	"Bay01_MC/MMXU1$MX$A$phsC$cVal$mag$f",
 	"Bay01_MC/MMXU1$MX$A$res$cVal$mag$f",
@@ -89,6 +90,7 @@ bool GetRegisteredDeviceInfo(struct sDeviceInfo* dinfo)
 		dinfo->num=0;
 		return false;
 	}
+	dinfo->count=0;
 	//清楚所有的state位
     for(int i=0;i<num;i++)
     	(dinfo->pLTUInfo+i)->state=0;
@@ -109,12 +111,12 @@ void*  YCPthread(void* parameter)
         // zlog_warn(zlogCat,"here");         
 		pthread_mutex_lock(&YCRequestmtx);
 		YCRequest=true;
+		DeviceInfo.time=time(NULL);
 		pthread_mutex_unlock(&YCRequestmtx);
 		struct sCoAPNewRequest tmp;
 		tmp.req=LTU_YC;
 		tmp.msgtype=COAP_MESSAGE_CON;
-		tmp.pthpara=malloc(sizeof(struct sPthreadPara));
-        tmp.pthpara->timing=300;
+		tmp.pthpara=NULL;
 		for(int i=0;i<DeviceInfo.num;i++)
 		{
 
@@ -126,9 +128,7 @@ void*  YCPthread(void* parameter)
 			mq_send(CoAPRxMq,&tmp,sizeof(tmp),0);
 			usleep(20000);
 		}
-		//进入休眠状态，等待5分钟结束
-		// sleep(YC_REQUEST_INTERVAL_TIME);
-		sleep(20);
+		pthread_cond_wait(&YCRequestcond,&YCRequestmtx);
 		pthread_mutex_lock(&YCRequestmtx);
 		YCRequest=false;
 		pthread_mutex_unlock(&YCRequestmtx);
@@ -138,41 +138,31 @@ void*  YCPthread(void* parameter)
 
             if((DeviceInfo.pLTUInfo+i)->state==0)
             {
-            	(DeviceInfo.pLTUInfo+i)->failedcount++;
-            	if((DeviceInfo.pLTUInfo+i)->failedcount==9)
-            	{
+            	
             		digMsg.bVal=0;
 					strcpy(digMsg.strDa,(DeviceInfo.pLTUInfo+i)->name);	 
 					kh_sendDigitalOutMsg(&digMsg);
 																								//failconut save to database;
-					zlog_warn(zlogCat,"%s state change:online -> offline",(DeviceInfo.pLTUInfo+i)->name );
-            	}
-            	else if((DeviceInfo.pLTUInfo+i)->failedcount==10)
-            		(DeviceInfo.pLTUInfo+i)->failedcount=9;
-            	else
-            	{
-            		zlog_warn(zlogCat,"%s time out",(DeviceInfo.pLTUInfo+i)->name );
-            	}
+					zlog_warn(zlogCat,"%s state :online -> offline",(DeviceInfo.pLTUInfo+i)->name );
+            		
+					kh_getLTUInforByName((DeviceInfo.pLTUInfo+i)->name,DeviceInfo.pLTUInfo+i);
+					(DeviceInfo.pLTUInfo+i)->state=0;
+					kh_setLTUInforByName((DeviceInfo.pLTUInfo+i)->name,DeviceInfo.pLTUInfo+i);
             	
             }
-            else
-            {
-            	if((DeviceInfo.pLTUInfo+i)->failedcount==9)
-            	{
-            		(DeviceInfo.pLTUInfo+i)->failedcount=0;
-            		digMsg.bVal=1;
-					strcpy(digMsg.strDa,(DeviceInfo.pLTUInfo+i)->name);	 
-					kh_sendDigitalOutMsg(&digMsg);
-																								//failconut save to database;
-					zlog_warn(zlogCat,"%s state change:offline -> online",(DeviceInfo.pLTUInfo+i)->name );
-            	}
+            
+			kh_getLTUInforByName((DeviceInfo.pLTUInfo+i)->name,DeviceInfo.pLTUInfo+i);
+			(DeviceInfo.pLTUInfo+i)->state=1;
+            kh_setLTUInforByName((DeviceInfo.pLTUInfo+i)->name,DeviceInfo.pLTUInfo+i);
+            
 
-            } 		
-		}
-		free(DeviceInfo.pLTUInfo);
+        }
+        free(DeviceInfo.pLTUInfo);
 		}
 		usleep(20000);
+		}
+		
 
-	}
+	
 	
 }

@@ -68,11 +68,11 @@ struct sCoAPNewRequest
 	struct sCoAPNewRequest* next;
 };
 
-
-
 struct sDeviceInfo
 {
-	uint16_t num;
+	uint16_t num;  //数据库中的LTU个数
+	time_t time;  //发送模拟量请求的时间
+	uint16_t count;// 接受到的LTU模拟量计数
 	struct LTUInfor* pLTUInfo;
 };
 
